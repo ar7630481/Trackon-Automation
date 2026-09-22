@@ -1,4 +1,3 @@
-# website.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,11 +10,48 @@ warnings.filterwarnings('ignore')
 # PAGE SETUP & UI
 # ==========================================
 st.set_page_config(page_title="Trackon Command Center", layout="wide", page_icon="🚀")
+
+# ==========================================
+# LOGIN SYSTEM
+# ==========================================
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+    st.session_state['user_role'] = ''
+
+if not st.session_state['logged_in']:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🔒 Trackon Secure Login")
+        st.markdown("---")
+        user_id = st.text_input("User ID (e.g., admin or user)")
+        pwd = st.text_input("Password", type="password")
+        
+        if st.button("Login", type="primary", use_container_width=True):
+            if user_id == "admin" and pwd == "9211213215":
+                st.session_state['logged_in'] = True
+                st.session_state['user_role'] = "Admin"
+                st.rerun()
+            elif user_id == "user" and pwd == "52729211":
+                st.session_state['logged_in'] = True
+                st.session_state['user_role'] = "User"
+                st.rerun()
+            else:
+                st.error("Ghalat ID ya Password!")
+    st.stop()
+
+# ==========================================
+# LOGOUT BUTTON & APP HEADER
+# ==========================================
+st.sidebar.success(f"🟢 Logged in as: {st.session_state['user_role']}")
+if st.sidebar.button("Logout", type="secondary"):
+    st.session_state['logged_in'] = False
+    st.rerun()
+
 st.title("🚀 TRACKON ULTIMATE MEGA AUTOMATION DASHBOARD")
 st.markdown("---")
 
 # ==========================================
-# HELPER FUNCTIONS (Logic Kept Exactly Same)
+# HELPER FUNCTIONS
 # ==========================================
 def format_pct_cnt(count, total):
     if total == 0 or pd.isna(total): return "0.0% (0)"
@@ -163,7 +199,6 @@ if st.sidebar.button("🚀 RUN AUTOMATION", type="primary"):
             pvt_fin = pd.pivot_table(df_fin, values='Invoice Id', index='RO Name', columns='Aging Bucket', aggfunc='count', fill_value=0, margins=True, margins_name='Grand Total')
             pvt_pay = pd.pivot_table(df_pay_team, values='Invoice Id', index='RO Name', columns='Aging Bucket', aggfunc='count', fill_value=0, margins=True, margins_name='Grand Total')
 
-
             # ======================================================================================
             # MODULE 2: OPERATIONS COMMAND CENTER
             # ======================================================================================
@@ -291,7 +326,6 @@ if st.sidebar.button("🚀 RUN AUTOMATION", type="primary"):
             df_leg['Actual TAT Till Destination'] = df_leg['Act_E2E_Hrs'].apply(format_hrs_safe)
             df_leg['Overall Remark'] = df_leg.apply(lambda r: calc_status(r['Trip_Act_Dep'], r['Trip_Sch_Dep'], 'Dep') + ", " + calc_status(r['Trip_Act_Arr'], r['Trip_Sch_Arr'], 'Arr'), axis=1)
 
-
             # ======================================================================================
             # MODULE 3: ROUTE SUMMARIES
             # ======================================================================================
@@ -371,7 +405,6 @@ if st.sidebar.button("🚀 RUN AUTOMATION", type="primary"):
             df_leg_final = df_leg[final_pq_cols].sort_values(by=['LH Type', 'E2E_Pair', 'Origin', 'Route Path', 'MCD_StartDate', 'Leg_Num'])
             df_leg_final.drop(columns=['Leg_Num', 'E2E_Pair'], inplace=True) 
 
-            # Actionable Notes
             df_leg['Late Dep'] = df_leg['Remark'].str.contains('Late Dep', case=False, na=False).astype(int)
             df_leg['Late Arr'] = df_leg['Remark'].str.contains('Late Arr', case=False, na=False).astype(int)
             df_leg['Missing'] = df_leg['Remark'].str.contains('No Dep|Missing', case=False, na=False, regex=True).astype(int)
@@ -401,7 +434,6 @@ if st.sidebar.button("🚀 RUN AUTOMATION", type="primary"):
             exec_notes['Action'] = "[ Review Details ]"
             exec_notes.sort_values(by=['LH Type', 'E2E_Pair', 'Route Path', 'Leg_Num'], inplace=True)
             exec_notes = exec_notes[['Region', 'Origin RO', 'Route Path', 'Legwise', 'Legs', 'Status', 'Actionable Note', 'Action']]
-
 
             # ======================================================================================
             # MODULE 4: MONTHLY MCD VENDOR MONITORING
