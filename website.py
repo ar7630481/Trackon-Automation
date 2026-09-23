@@ -271,28 +271,26 @@ def fetch_fleet_data():
             df = pd.DataFrame(normalized_data[1:], columns=normalized_data[0])
             df.columns = [str(c).replace('\n', ' ').strip() if c else f"Col_{i}" for i, c in enumerate(df.columns)]
             
-            veh_col = next((c for c in df.columns if 'Vehicle' in str(c) or 'Name' in str(c)), None)
+            # Robust Column Matching
+            veh_col = next((c for c in df.columns if 'veh' in str(c).lower() or 'name' in str(c).lower()), None)
+            status_col = next((c for c in df.columns if 'stat' in str(c).lower() and 'job' not in str(c).lower()), None)
+            speed_col = next((c for c in df.columns if 'spee' in str(c).lower()), None)
+            nearest_col = next((c for c in df.columns if 'near' in str(c).lower() or 'rem' in str(c).lower()), None)
+            loc_col = next((c for c in df.columns if 'loc' in str(c).lower()), None)
+            time_col = next((c for c in df.columns if 'last' in str(c).lower() or 'date' in str(c).lower() or 'time' in str(c).lower()), None)
+
             if veh_col:
                 raw_str = df[veh_col].astype(str).str.replace(r'\n', ' ', regex=True)
-                df['Vehicle_Code'] = raw_str.str.extract(r'(?i)(?:Name:)?\s*(\d{4})', expand=False).fillna("-")
-                df['Full_Number'] = raw_str.str.extract(r'(?i)No:\s*([A-Z0-9]+)', expand=False).fillna("-")
+                df['Vehicle_Code'] = raw_str.str.extract(r'(\d{4})', expand=False).fillna("-")
+                df['Full_Number'] = raw_str.str.extract(r'(?i)No:\s*([A-Z0-9]+)', expand=False).combine_first(raw_str.str.extract(r'([A-Z]{2}\d{1,2}[A-Z]{1,2}\d{4})', expand=False)).fillna("-")
             else:
                 df['Vehicle_Code'] = "-"
                 df['Full_Number'] = "-"
                 
-            status_col = next((c for c in df.columns if 'Status' in str(c) and 'Job' not in str(c)), None)
             df['Status'] = df[status_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if status_col else "-"
-                
-            speed_col = next((c for c in df.columns if 'Spee' in str(c) or 'Speed' in str(c)), None)
             df['Speed'] = df[speed_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if speed_col else "-"
-                
-            nearest_col = next((c for c in df.columns if 'Nearest' in str(c)), None)
             df['Remaining_KMS'] = df[nearest_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if nearest_col else "-"
-                
-            loc_col = next((c for c in df.columns if 'Location' in str(c)), None)
             df['Location'] = df[loc_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if loc_col else "-"
-                
-            time_col = next((c for c in df.columns if 'Last' in str(c) or 'dated' in str(c)), None)
             df['Last_Updated'] = df[time_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if time_col else "-"
 
             final_cols = ['Vehicle_Code', 'Full_Number', 'Status', 'Speed', 'Remaining_KMS', 'Location', 'Last_Updated']
@@ -806,9 +804,9 @@ with tab6:
         search_query = st.text_input("Search by 4-digit ID or full number:", placeholder="e.g. 3389")
         
         if search_query:
-            sq = search_query.strip()
-            mask = (df_gps['Vehicle_Code'].str.contains(sq, case=False, na=False) | 
-                    df_gps['Full_Number'].str.contains(sq, case=False, na=False))
+            sq = str(search_query).strip().lower()
+            mask = (df_gps['Vehicle_Code'].astype(str).str.lower().str.contains(sq, na=False) | 
+                    df_gps['Full_Number'].astype(str).str.lower().str.contains(sq, na=False))
             result = df_gps[mask]
             
             if not result.empty:
@@ -833,11 +831,11 @@ with tab6:
                             gmaps_url = f"https://www.google.com/maps/dir/?api=1&destination={safe_location}"
                             st.link_button(f"📍 View Route Map for {full_no}", gmaps_url, type="primary", use_container_width=True)
             else:
-                st.error(f"❌ Vehicle '{sq}' not found.")
+                st.info(f"ℹ️ Gaadi '{sq}' live list mein nahi hai.")
                 
         st.markdown("---")
         st.markdown("### 📋 Active Fleet Log")
         st.dataframe(df_gps, hide_index=True)
 
     else:
-        st.error("⚠️ Background browser engine start nahi ho paaya. Niche right side me '< Manage app' par click karke Logs check karo.")
+        st.error("⚠️ Background engine fail ho gaya. Kripya retry karein.")
