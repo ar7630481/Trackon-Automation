@@ -16,8 +16,7 @@ from streamlit_autorefresh import st_autorefresh
 
 warnings.filterwarnings('ignore')
 
-# Streamlit Cloud par Playwright ko safely run karne ke liye Chromium install command
-os.system("python -m playwright install chromium")
+os.system("playwright install chromium")
 
 # ==========================================
 # PAGE SETUP & UI
@@ -151,7 +150,7 @@ def clear_pre_modal_popups(page):
         if svg_close.is_visible(timeout=1000): svg_close.click()
     except: pass
 
-@st.cache_data(ttl=300, show_spinner="⏳ Fetching Live GPS Data from 4 accounts... Please wait 1-2 minutes...")
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_fleet_data():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     all_raw_data = []
@@ -261,7 +260,7 @@ def fetch_fleet_data():
                         try: os.remove(pdf_path)
                         except: pass
                 except Exception as e:
-                    print(f"Error fetching {acc['email']}: {e}")
+                    pass
                 finally:
                     context.close()
             browser.close()
@@ -310,9 +309,7 @@ def fetch_fleet_data():
         else:
             return pd.DataFrame()
     except Exception as e:
-        print(f"GPS fetch issue: {e}")
         return st.session_state.get('cached_gps_df', pd.DataFrame())
-
 
 # ==========================================
 # ROLE-BASED DASHBOARD LOGIC (FILES)
@@ -787,16 +784,16 @@ with tab6:
     old_df = st.session_state.get('cached_gps_df', pd.DataFrame())
     last_time = st.session_state.get('last_sync_time', 'Never synced')
     
-    # Button to force fetch GPS data
     if st.button("Fetch Live GPS Data", use_container_width=True):
         fetch_fleet_data.clear()
         st.rerun()
 
-    df_gps = fetch_fleet_data()
+    with st.spinner("⏳ Live tracking data fetch ho raha hai... Isme 1-2 minute lag sakte hain, please wait..."):
+        df_gps = fetch_fleet_data()
     
     if df_gps.empty and not old_df.empty:
         df_gps = old_df
-        st.warning(f"⚠️ Could not fetch new data. Showing last known coordinates from {last_time}.")
+        st.warning(f"⚠️ Naya data fetch nahi ho paaya. Showing last known coordinates from {last_time}.")
     
     if not df_gps.empty:
         col1, col2 = st.columns([3, 1])
@@ -843,4 +840,4 @@ with tab6:
         st.dataframe(df_gps, hide_index=True)
 
     else:
-        st.warning("Live GPS data is not loaded yet. Click 'Fetch Live GPS Data' above.")
+        st.error("⚠️ Background browser engine start nahi ho paaya. Niche right side me '< Manage app' par click karke Logs check karo.")
