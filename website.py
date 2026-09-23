@@ -5,13 +5,21 @@ import warnings
 import io
 import os
 import pickle
+import urllib.request
+import urllib.parse
+import time
+import shutil
+from datetime import datetime
+from playwright.sync_api import sync_playwright
+import pdfplumber
+from streamlit_autorefresh import st_autorefresh
 
 warnings.filterwarnings('ignore')
 
 # ==========================================
 # PAGE SETUP & UI
 # ==========================================
-st.set_page_config(page_title="Trackon Command Center", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Trackon Command Center", layout="wide", page_icon="🚛")
 
 # ==========================================
 # LOGIN SYSTEM
@@ -38,7 +46,7 @@ if not st.session_state['logged_in']:
                 st.session_state['user_role'] = "User"
                 st.rerun()
             else:
-                st.error("Ghalat ID ya Password!")
+                st.error("Invalid ID or Password.")
     st.stop()
 
 # ==========================================
@@ -49,11 +57,17 @@ if st.sidebar.button("Logout", type="secondary"):
     st.session_state['logged_in'] = False
     st.rerun()
 
-st.title("🚀 TRACKON ULTIMATE MEGA AUTOMATION DASHBOARD")
+st.title("🚛 Trackon Operations & Command Center")
 st.markdown("---")
 
 # ==========================================
-# HELPER FUNCTIONS
+# BACKGROUND AUTO-REFRESH (Every 5 Minutes)
+# ==========================================
+# Ye background me page ko har 300,000 ms (5 min) me ek smooth refresh dega
+st_autorefresh(interval=300000, key="fleet_auto_refresh")
+
+# ==========================================
+# HELPER FUNCTIONS (ANALYTICS & OPERATIONS)
 # ==========================================
 def format_pct_cnt(count, total):
     if total == 0 or pd.isna(total): return "0.0% (0)"
@@ -112,23 +126,213 @@ def get_day_offset(day_val):
     except: return np.nan
 
 # ==========================================
-# ROLE-BASED DASHBOARD LOGIC
+# HELPER FUNCTIONS (LIVE FLEET GPS)
+# ==========================================
+FLEET_ACCOUNTS = [
+    {"email": "anand.joshi@trackon.in", "password": "Trackon@123"},
+    {"email": "lh.fleetops@trackon.in", "password": "i7F0TYVh@"},
+    {"email": "amar.vandanamotors@gmail.com", "password": "Amar@123"},
+    {"email": "9712339060", "password": "Boss@9918"}
+]
+
+def clear_pre_modal_popups(page):
+    try:
+        close_btn = page.locator('span.ant-tour-close-icon')
+        if close_btn.is_visible(timeout=1000): close_btn.click()
+    except: pass
+    try:
+        next_btn = page.locator("span", has_text="Next")
+        if next_btn.is_visible(timeout=1000): next_btn.click()
+    except: pass
+    try:
+        svg_close = page.locator('svg[data-icon="close"]')
+        if svg_close.is_visible(timeout=1000): svg_close.click()
+    except: pass
+
+# TTL 300 means har 5 minute me background cache expire hoga
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_fleet_data():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    all_raw_data = []
+    
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            ) 
+            
+            for acc in FLEET_ACCOUNTS:
+                context = browser.new_context(accept_downloads=True)
+                page = context.new_page()
+                
+                safe_email = acc['email'].replace('@', '_').replace('.', '_')
+                pdf_path = os.path.join(script_dir, f"temp_{safe_email}.pdf")
+                
+                try:
+                    page.goto("https://app.fleetx.io/users/login", timeout=90000, wait_until="domcontentloaded")
+                    page.fill('input[data-testid="email"]', acc['email'])
+                    page.fill('input[data-testid="password"]', acc['password'])
+                    page.click('button[type="submit"]')
+
+                    page.wait_for_selector('img[title="Realtime Vehicle Report"]', timeout=90000)
+                    page.wait_for_timeout(2000)
+                    clear_pre_modal_popups(page)
+                    page.evaluate("document.querySelector('img[title=\"Realtime Vehicle Report\"]').click()")
+                    page.wait_for_timeout(2000) 
+                    page.evaluate("Array.from(document.querySelectorAll('span')).find(el => el.textContent.trim() === 'Download PDF')?.click()")
+                    page.wait_for_timeout(2000) 
+
+                    if os.path.exists(pdf_path): 
+                        try: os.remove(pdf_path)
+                        except: pass
+
+                    # AWS Logic
+                    if "anand.joshi" in acc['email'] or "lh.fleetops" in acc['email']:
+                        captured_urls = []
+                        def handle_new_page(new_page):
+                            new_page.wait_for_timeout(3000)
+                            captured_urls.append(new_page.url)
+
+                        context.on("page", handle_new_page)
+                        page.evaluate("Array.from(document.querySelectorAll('span')).find(el => el.textContent.trim() === 'Download')?.click()")
+                        
+                        pdf_url = ""
+                        for _ in range(40):
+                            for url in captured_urls:
+                                if "amazonaws.com" in url or ".pdf" in url.lower():
+                                    pdf_url = url
+                                    break
+                            if not pdf_url:
+                                for p_tab in context.pages:
+                                    if "amazonaws.com" in p_tab.url or ".pdf" in p_tab.url.lower():
+                                        pdf_url = p_tab.url
+                                        break
+                            if pdf_url: break
+                            page.wait_for_timeout(1000)
+                            
+                        if pdf_url:
+                            urllib.request.urlretrieve(pdf_url, pdf_path)
+
+                    # CDP Logic
+                    else:
+                        dl_folder = os.path.join(script_dir, f"dl_{safe_email}")
+                        os.makedirs(dl_folder, exist_ok=True)
+                        
+                        for f in os.listdir(dl_folder):
+                            try: os.remove(os.path.join(dl_folder, f))
+                            except: pass
+
+                        client = context.new_cdp_session(page)
+                        client.send("Page.setDownloadBehavior", {
+                            "behavior": "allow",
+                            "downloadPath": dl_folder
+                        })
+
+                        page.evaluate("Array.from(document.querySelectorAll('span')).find(el => el.textContent.trim() === 'Download')?.click()")
+                        
+                        for _ in range(60): 
+                            files = os.listdir(dl_folder)
+                            if not files:
+                                time.sleep(1)
+                                continue
+                            if any(f.lower().endswith(('.tmp', '.crdownload')) for f in files):
+                                time.sleep(1)
+                                continue
+                                
+                            pdf_files = [f for f in files if f.lower().endswith('.pdf')]
+                            if pdf_files:
+                                downloaded_file = os.path.join(dl_folder, pdf_files[0])
+                                shutil.move(downloaded_file, pdf_path)
+                                break
+                            time.sleep(1)
+                        try: shutil.rmtree(dl_folder)
+                        except: pass
+
+                    if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
+                        with pdfplumber.open(pdf_path) as pdf:
+                            for page_obj in pdf.pages:
+                                table = page_obj.extract_table()
+                                if table:
+                                    for row in table:
+                                        if any(cell and str(cell).strip() for cell in row):
+                                            all_raw_data.append(row)
+                        try: os.remove(pdf_path)
+                        except: pass
+                except Exception as e:
+                    print(f"Error fetching {acc['email']}: {e}")
+                finally:
+                    context.close()
+            browser.close()
+            
+        if all_raw_data:
+            max_cols = max(len(row) for row in all_raw_data)
+            normalized_data = [row + [""] * (max_cols - len(row)) for row in all_raw_data]
+            df = pd.DataFrame(normalized_data[1:], columns=normalized_data[0])
+            df.columns = [str(c).replace('\n', ' ').strip() if c else f"Col_{i}" for i, c in enumerate(df.columns)]
+            
+            veh_col = next((c for c in df.columns if 'Vehicle' in str(c) or 'Name' in str(c)), None)
+            if veh_col:
+                raw_str = df[veh_col].astype(str).str.replace(r'\n', ' ', regex=True)
+                df['Vehicle_Code'] = raw_str.str.extract(r'(?i)(?:Name:)?\s*(\d{4})', expand=False).fillna("-")
+                df['Full_Number'] = raw_str.str.extract(r'(?i)No:\s*([A-Z0-9]+)', expand=False).fillna("-")
+            else:
+                df['Vehicle_Code'] = "-"
+                df['Full_Number'] = "-"
+                
+            status_col = next((c for c in df.columns if 'Status' in str(c) and 'Job' not in str(c)), None)
+            df['Status'] = df[status_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if status_col else "-"
+                
+            speed_col = next((c for c in df.columns if 'Spee' in str(c) or 'Speed' in str(c)), None)
+            df['Speed'] = df[speed_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if speed_col else "-"
+                
+            nearest_col = next((c for c in df.columns if 'Nearest' in str(c)), None)
+            df['Remaining_KMS'] = df[nearest_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if nearest_col else "-"
+                
+            loc_col = next((c for c in df.columns if 'Location' in str(c)), None)
+            df['Location'] = df[loc_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if loc_col else "-"
+                
+            time_col = next((c for c in df.columns if 'Last' in str(c) or 'dated' in str(c)), None)
+            df['Last_Updated'] = df[time_col].astype(str).str.replace(r'\n', ' ', regex=True).str.strip() if time_col else "-"
+
+            final_cols = ['Vehicle_Code', 'Full_Number', 'Status', 'Speed', 'Remaining_KMS', 'Location', 'Last_Updated']
+            for col in final_cols:
+                if col not in df.columns:
+                    df[col] = "-"
+                    
+            df_clean = df[final_cols]
+            df_clean = df_clean.drop_duplicates(subset=['Full_Number'], keep='first')
+            
+            # Save to session state so UI never goes blank
+            st.session_state['cached_gps_df'] = df_clean
+            st.session_state['last_sync_time'] = datetime.now().strftime("%I:%M %p, %d %b %Y")
+            return df_clean
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        # Crash safety: If anything fails, gracefully return the old cached data
+        print(f"Engine crash averted: {e}")
+        return st.session_state.get('cached_gps_df', pd.DataFrame())
+
+
+# ==========================================
+# ROLE-BASED DASHBOARD LOGIC (FILES)
 # ==========================================
 data_ready = False
 
 if st.session_state['user_role'] == 'Admin':
-    st.sidebar.header("📂 Admin: Upload Master Data")
+    st.sidebar.header("📂 Data Upload Center")
     payment_file = st.sidebar.file_uploader("1. Payment Tracking Data", type=['xlsx'])
     legwise_file = st.sidebar.file_uploader("2. Ondemand Legwise Report", type=['xlsx'])
     route_file = st.sidebar.file_uploader("3. Scheduled Route Master", type=['xlsx'])
     branch_file = st.sidebar.file_uploader("4. RO & Branch List", type=['xlsx'])
     mcd_file = st.sidebar.file_uploader("5. Monthly MCD Vendor Data", type=['xlsx'])
 
-    if st.sidebar.button("🚀 RUN AUTOMATION", type="primary"):
+    if st.sidebar.button("🚀 Process System Data", type="primary"):
         if not all([payment_file, legwise_file, route_file, branch_file, mcd_file]):
-            st.sidebar.error("Please upload all 5 files to proceed.")
+            st.sidebar.error("All 5 primary files are required to update the command center.")
         else:
-            with st.spinner("Processing Mega Data Engine... Please wait..."):
+            with st.spinner("Processing Operational Engine..."):
                 
                 # --- MODULE 1: VENDOR PAYMENT TRACKING ---
                 df_pay = pd.read_excel(payment_file)
@@ -490,15 +694,14 @@ if st.session_state['user_role'] == 'Admin':
                     'rep_summary': rep_summary, 'ven_final': ven_final
                 }
                 
-                # Pickle preserves all table formats and indexes perfectly
                 with open('server_dashboard_data.pkl', 'wb') as f:
                     pickle.dump(dashboard_data, f)
                     
                 data_ready = True
-                st.sidebar.success("✅ Files processed and saved to server for all users!")
+                st.sidebar.success("✅ Operational files synchronized successfully!")
 
 elif st.session_state['user_role'] == 'User':
-    st.sidebar.info("👀 Viewing Mode: Sirf Admin naya data upload kar sakte hain.")
+    st.sidebar.info("👀 Viewing Mode: Operations files are updated by Administration.")
     
     if os.path.exists('server_dashboard_data.pkl'):
         with open('server_dashboard_data.pkl', 'rb') as f:
@@ -519,49 +722,48 @@ elif st.session_state['user_role'] == 'User':
         
         data_ready = True
     else:
-        st.sidebar.warning("⚠️ Admin ne aaj ka data abhi tak server par upload nahi kiya hai. Thodi der baad check karein.")
+        st.sidebar.warning("⚠️ Daily files have not been uploaded by the Administrator yet.")
 
 # ==========================================
 # STREAMLIT UI RENDERER (TABS)
 # ==========================================
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["💰 Payments Engine", "🗺️ Operations Base", "📊 Route Analytics", "⚠️ Action Center", "🚚 Vendor Matrix", "🛰️ Live Fleet GPS"])
+
+# TABS 1 TO 5: FILE DATA
 if data_ready:
-    st.success("✅ Dashboard Live!")
-    
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["💰 Payments Engine", "🗺️ Operations Base", "📊 Route Analytics", "⚠️ Action Center", "🚚 Vendor/MCD Matrix"])
-    
     with tab1:
-        st.subheader("OVERALL RO-WISE CONTROL CENTER")
+        st.subheader("Regional Financial Pending Analysis")
         st.dataframe(pvt_master, use_container_width=True)
         col1, col2, col3 = st.columns(3)
-        col1.write("**Cost Control Pending**"); col1.dataframe(pvt_cc, use_container_width=True)
-        col2.write("**Finance Pending**"); col2.dataframe(pvt_fin, use_container_width=True)
-        col3.write("**Payment Team Pending**"); col3.dataframe(pvt_pay, use_container_width=True)
-        st.write("**Payment Master Data**")
+        col1.write("**Cost Control Hold**"); col1.dataframe(pvt_cc, use_container_width=True)
+        col2.write("**Finance Team Hold**"); col2.dataframe(pvt_fin, use_container_width=True)
+        col3.write("**Payment Gateway Hold**"); col3.dataframe(pvt_pay, use_container_width=True)
+        st.write("**Complete Transaction Registry**")
         st.dataframe(df_master, use_container_width=True)
 
     with tab2:
-        st.subheader("Route Master Base Data")
+        st.subheader("Route Configuration Master")
         st.dataframe(route_master_df, use_container_width=True)
-        st.subheader("Legwise Processed Trips")
+        st.subheader("Daily Processed Dispatches")
         st.dataframe(df_leg_final, use_container_width=True)
 
     with tab3:
-        st.subheader("Overall Route Summary")
+        st.subheader("Macro Level Route Health")
         st.dataframe(overall_sum.style.applymap(lambda x: "background-color: #D4EFDF; color: #196F3D" if "Smooth" in str(x) else ("background-color: #FADBD8; color: #943126" if "Critical" in str(x) else "")), use_container_width=True)
-        st.subheader("Legwise Summary")
+        st.subheader("Micro Level Operations Summary")
         st.dataframe(leg_sum, use_container_width=True)
 
     with tab4:
-        st.subheader("Actionable Notes (Exceptions Only)")
+        st.subheader("Actionable Delay Notifications")
         st.dataframe(exec_notes.style.applymap(lambda x: "background-color: #FADBD8; color: #943126" if "Critical" in str(x) else ("background-color: #FCF3CF; color: #9A7D0A" if "Warning" in str(x) else "")), use_container_width=True)
 
     with tab5:
-        st.subheader("Vehicle Replacement Report")
+        st.subheader("Active Vehicle Replacements")
         st.dataframe(rep_summary, use_container_width=True)
-        st.subheader("Vendor Multi-Assignment Analysis")
+        st.subheader("Vendor Deployment Analysis")
         st.dataframe(ven_final, use_container_width=True)
 
-    # Option to Export Raw Output 
+    # Export Logic
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_master.to_excel(writer, sheet_name='Master_Database', index=False)
@@ -573,4 +775,78 @@ if data_ready:
         rep_summary.to_excel(writer, sheet_name='Replacement_Report', index=False)
         ven_final.to_excel(writer, sheet_name='Vendor_Analysis', index=False)
     
-    st.sidebar.download_button(label="📥 Download Master Excel", data=output.getvalue(), file_name="Auto_Generated_Monitoring_Data.xlsx", mime="application/vnd.ms-excel")
+    st.sidebar.download_button(label="📥 Export Full Report", data=output.getvalue(), file_name="Manager_Report_Data.xlsx", mime="application/vnd.ms-excel")
+else:
+    for t in [tab1, tab2, tab3, tab4, tab5]:
+        with t:
+            st.info("System waiting for master data files upload.")
+
+# TAB 6: GPS TRACKING (Independent of uploaded files)
+with tab6:
+    st.subheader("Live Fleet Tracking")
+    
+    # Check if we have cached session data while the scraper runs in background
+    old_df = st.session_state.get('cached_gps_df', pd.DataFrame())
+    last_time = st.session_state.get('last_sync_time', 'Never synced')
+    
+    # Try fetching fresh data
+    df_gps = fetch_fleet_data()
+    
+    # Fallback to session cache if fresh fetch completely fails or returns empty
+    if df_gps.empty and not old_df.empty:
+        df_gps = old_df
+        st.warning(f"⚠️ Live server connection unstable. Showing last known coordinates from {last_time}.")
+    
+    if not df_gps.empty:
+        col1, col2 = st.columns([3, 1])
+        sync_time = st.session_state.get('last_sync_time', 'Recently')
+        col1.success(f"Satellite Data Connected. Last Synced: {sync_time}")
+        
+        if col2.button("🔄 Force Data Refresh", use_container_width=True):
+            fetch_fleet_data.clear() 
+            st.rerun()
+
+        st.info(f"📊 **Active Tracked Vehicles:** {len(df_gps)}")
+        
+        st.markdown("### 🔍 Locate Unit via G-Maps")
+        search_query = st.text_input("Search by 4-digit ID or full registration number:", placeholder="e.g. 3389")
+        
+        if search_query:
+            sq = search_query.strip()
+            mask = (df_gps['Vehicle_Code'].str.contains(sq, case=False, na=False) | 
+                    df_gps['Full_Number'].str.contains(sq, case=False, na=False))
+            result = df_gps[mask]
+            
+            if not result.empty:
+                st.success(f"✅ {len(result)} asset(s) identified.")
+                for index, vehicle in result.iterrows():
+                    full_no = vehicle.get('Full_Number', '-')
+                    with st.container(border=True):
+                        st.markdown(f"### 🚛 Asset: {full_no}")
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric(label="🚦 Operational Status", value=str(vehicle.get('Status', '-')).upper())
+                        c2.metric(label="⚡ Velocity", value=str(vehicle.get('Speed', '-')))
+                        c3.metric(label="🕒 Ping Time", value=str(vehicle.get('Last_Updated', '-')))
+                        st.divider()
+                        loc = str(vehicle.get('Location', '-'))
+                        st.info(f"**🌍 Geo-coordinates:**\n\n{loc}")
+                        st.warning(f"**🛣️ Trajectory Status:**\n\n{str(vehicle.get('Remaining_KMS', '-'))}")
+                        
+                        if loc != "-":
+                            loc_parts = [p.strip() for p in loc.split(',')]
+                            optimized_loc = ", ".join(loc_parts[-3:]) if len(loc_parts) >= 3 else loc
+                            safe_location = urllib.parse.quote(optimized_loc)
+                            gmaps_url = f"https://www.google.com/maps/dir/?api=1&destination={safe_location}"
+                            st.link_button(f"📍 Route Map Generation for {full_no}", gmaps_url, type="primary", use_container_width=True)
+            else:
+                st.error(f"❌ Asset '{sq}' is not reporting in the system.")
+                
+        st.markdown("---")
+        st.markdown("### 📋 Active Fleet Log")
+        st.dataframe(df_gps, hide_index=True)
+
+    else:
+        st.error("⚠️ Initializing fleet nodes. Fetching data for the first time...")
+        if st.button("🔄 Start Node Link", use_container_width=True):
+            fetch_fleet_data.clear()
+            st.rerun()
