@@ -16,10 +16,13 @@ from streamlit_autorefresh import st_autorefresh
 
 warnings.filterwarnings('ignore')
 
+# Streamlit Cloud par Playwright ko safely run karne ke liye Chromium install command
+os.system("python -m playwright install chromium")
+
 # ==========================================
 # PAGE SETUP & UI
 # ==========================================
-st.set_page_config(page_title="Trackon Command Center", layout="wide", page_icon="🚛")
+st.set_page_config(page_title="Trackon Dashboard", layout="wide", page_icon="🚛")
 
 # ==========================================
 # LOGIN SYSTEM
@@ -31,9 +34,9 @@ if 'logged_in' not in st.session_state:
 if not st.session_state['logged_in']:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.title("🔒 Trackon Secure Login")
+        st.title("🔒 Trackon Login")
         st.markdown("---")
-        user_id = st.text_input("User ID (e.g., admin or user)")
+        user_id = st.text_input("User ID")
         pwd = st.text_input("Password", type="password")
         
         if st.button("Login", type="primary", use_container_width=True):
@@ -57,13 +60,12 @@ if st.sidebar.button("Logout", type="secondary"):
     st.session_state['logged_in'] = False
     st.rerun()
 
-st.title("🚛 Trackon Operations & Command Center")
+st.title("🚛 Trackon Dashboard")
 st.markdown("---")
 
 # ==========================================
 # BACKGROUND AUTO-REFRESH (Every 5 Minutes)
 # ==========================================
-# Ye background me page ko har 300,000 ms (5 min) me ek smooth refresh dega
 st_autorefresh(interval=300000, key="fleet_auto_refresh")
 
 # ==========================================
@@ -149,8 +151,7 @@ def clear_pre_modal_popups(page):
         if svg_close.is_visible(timeout=1000): svg_close.click()
     except: pass
 
-# TTL 300 means har 5 minute me background cache expire hoga
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner="⏳ Fetching Live GPS Data from 4 accounts... Please wait 1-2 minutes...")
 def fetch_fleet_data():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     all_raw_data = []
@@ -303,15 +304,13 @@ def fetch_fleet_data():
             df_clean = df[final_cols]
             df_clean = df_clean.drop_duplicates(subset=['Full_Number'], keep='first')
             
-            # Save to session state so UI never goes blank
             st.session_state['cached_gps_df'] = df_clean
             st.session_state['last_sync_time'] = datetime.now().strftime("%I:%M %p, %d %b %Y")
             return df_clean
         else:
             return pd.DataFrame()
     except Exception as e:
-        # Crash safety: If anything fails, gracefully return the old cached data
-        print(f"Engine crash averted: {e}")
+        print(f"GPS fetch issue: {e}")
         return st.session_state.get('cached_gps_df', pd.DataFrame())
 
 
@@ -321,18 +320,18 @@ def fetch_fleet_data():
 data_ready = False
 
 if st.session_state['user_role'] == 'Admin':
-    st.sidebar.header("📂 Data Upload Center")
+    st.sidebar.header("📂 Upload Data Files")
     payment_file = st.sidebar.file_uploader("1. Payment Tracking Data", type=['xlsx'])
     legwise_file = st.sidebar.file_uploader("2. Ondemand Legwise Report", type=['xlsx'])
     route_file = st.sidebar.file_uploader("3. Scheduled Route Master", type=['xlsx'])
     branch_file = st.sidebar.file_uploader("4. RO & Branch List", type=['xlsx'])
     mcd_file = st.sidebar.file_uploader("5. Monthly MCD Vendor Data", type=['xlsx'])
 
-    if st.sidebar.button("🚀 Process System Data", type="primary"):
+    if st.sidebar.button("Process Files", type="primary"):
         if not all([payment_file, legwise_file, route_file, branch_file, mcd_file]):
-            st.sidebar.error("All 5 primary files are required to update the command center.")
+            st.sidebar.error("All 5 files are required.")
         else:
-            with st.spinner("Processing Operational Engine..."):
+            with st.spinner("Processing files..."):
                 
                 # --- MODULE 1: VENDOR PAYMENT TRACKING ---
                 df_pay = pd.read_excel(payment_file)
@@ -698,10 +697,10 @@ if st.session_state['user_role'] == 'Admin':
                     pickle.dump(dashboard_data, f)
                     
                 data_ready = True
-                st.sidebar.success("✅ Operational files synchronized successfully!")
+                st.sidebar.success("✅ Files processed successfully.")
 
 elif st.session_state['user_role'] == 'User':
-    st.sidebar.info("👀 Viewing Mode: Operations files are updated by Administration.")
+    st.sidebar.info("👀 Viewing Mode.")
     
     if os.path.exists('server_dashboard_data.pkl'):
         with open('server_dashboard_data.pkl', 'rb') as f:
@@ -722,12 +721,12 @@ elif st.session_state['user_role'] == 'User':
         
         data_ready = True
     else:
-        st.sidebar.warning("⚠️ Daily files have not been uploaded by the Administrator yet.")
+        st.sidebar.warning("⚠️ Data has not been uploaded by the Admin yet.")
 
 # ==========================================
 # STREAMLIT UI RENDERER (TABS)
 # ==========================================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["💰 Payments Engine", "🗺️ Operations Base", "📊 Route Analytics", "⚠️ Action Center", "🚚 Vendor Matrix", "🛰️ Live Fleet GPS"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Payments", "Route Details", "Route Summary", "Actionable Notes", "Vendor Details", "Live GPS Tracking"])
 
 # TABS 1 TO 5: FILE DATA
 if data_ready:
@@ -775,41 +774,39 @@ if data_ready:
         rep_summary.to_excel(writer, sheet_name='Replacement_Report', index=False)
         ven_final.to_excel(writer, sheet_name='Vendor_Analysis', index=False)
     
-    st.sidebar.download_button(label="📥 Export Full Report", data=output.getvalue(), file_name="Manager_Report_Data.xlsx", mime="application/vnd.ms-excel")
+    st.sidebar.download_button(label="📥 Export Report Data", data=output.getvalue(), file_name="Dashboard_Data.xlsx", mime="application/vnd.ms-excel")
 else:
     for t in [tab1, tab2, tab3, tab4, tab5]:
         with t:
-            st.info("System waiting for master data files upload.")
+            st.info("System is waiting for master data file upload.")
 
-# TAB 6: GPS TRACKING (Independent of uploaded files)
+# TAB 6: GPS TRACKING
 with tab6:
-    st.subheader("Live Fleet Tracking")
+    st.subheader("Live GPS Tracking")
     
-    # Check if we have cached session data while the scraper runs in background
     old_df = st.session_state.get('cached_gps_df', pd.DataFrame())
     last_time = st.session_state.get('last_sync_time', 'Never synced')
     
-    # Try fetching fresh data
+    # Button to force fetch GPS data
+    if st.button("Fetch Live GPS Data", use_container_width=True):
+        fetch_fleet_data.clear()
+        st.rerun()
+
     df_gps = fetch_fleet_data()
     
-    # Fallback to session cache if fresh fetch completely fails or returns empty
     if df_gps.empty and not old_df.empty:
         df_gps = old_df
-        st.warning(f"⚠️ Live server connection unstable. Showing last known coordinates from {last_time}.")
+        st.warning(f"⚠️ Could not fetch new data. Showing last known coordinates from {last_time}.")
     
     if not df_gps.empty:
         col1, col2 = st.columns([3, 1])
         sync_time = st.session_state.get('last_sync_time', 'Recently')
-        col1.success(f"Satellite Data Connected. Last Synced: {sync_time}")
-        
-        if col2.button("🔄 Force Data Refresh", use_container_width=True):
-            fetch_fleet_data.clear() 
-            st.rerun()
+        col1.success(f"GPS Data Active. Last Updated: {sync_time}")
 
-        st.info(f"📊 **Active Tracked Vehicles:** {len(df_gps)}")
+        st.info(f"📊 **Total Vehicles:** {len(df_gps)}")
         
-        st.markdown("### 🔍 Locate Unit via G-Maps")
-        search_query = st.text_input("Search by 4-digit ID or full registration number:", placeholder="e.g. 3389")
+        st.markdown("### 🔍 Search Location")
+        search_query = st.text_input("Search by 4-digit ID or full number:", placeholder="e.g. 3389")
         
         if search_query:
             sq = search_query.strip()
@@ -818,35 +815,32 @@ with tab6:
             result = df_gps[mask]
             
             if not result.empty:
-                st.success(f"✅ {len(result)} asset(s) identified.")
+                st.success(f"✅ {len(result)} vehicle(s) found.")
                 for index, vehicle in result.iterrows():
                     full_no = vehicle.get('Full_Number', '-')
                     with st.container(border=True):
-                        st.markdown(f"### 🚛 Asset: {full_no}")
+                        st.markdown(f"### 🚛 Vehicle: {full_no}")
                         c1, c2, c3 = st.columns(3)
-                        c1.metric(label="🚦 Operational Status", value=str(vehicle.get('Status', '-')).upper())
-                        c2.metric(label="⚡ Velocity", value=str(vehicle.get('Speed', '-')))
-                        c3.metric(label="🕒 Ping Time", value=str(vehicle.get('Last_Updated', '-')))
+                        c1.metric(label="🚦 Status", value=str(vehicle.get('Status', '-')).upper())
+                        c2.metric(label="⚡ Speed", value=str(vehicle.get('Speed', '-')))
+                        c3.metric(label="🕒 Last Updated", value=str(vehicle.get('Last_Updated', '-')))
                         st.divider()
                         loc = str(vehicle.get('Location', '-'))
-                        st.info(f"**🌍 Geo-coordinates:**\n\n{loc}")
-                        st.warning(f"**🛣️ Trajectory Status:**\n\n{str(vehicle.get('Remaining_KMS', '-'))}")
+                        st.info(f"**🌍 Location:**\n\n{loc}")
+                        st.warning(f"**🛣️ Distance remaining:**\n\n{str(vehicle.get('Remaining_KMS', '-'))}")
                         
                         if loc != "-":
                             loc_parts = [p.strip() for p in loc.split(',')]
                             optimized_loc = ", ".join(loc_parts[-3:]) if len(loc_parts) >= 3 else loc
                             safe_location = urllib.parse.quote(optimized_loc)
                             gmaps_url = f"https://www.google.com/maps/dir/?api=1&destination={safe_location}"
-                            st.link_button(f"📍 Route Map Generation for {full_no}", gmaps_url, type="primary", use_container_width=True)
+                            st.link_button(f"📍 View Route Map for {full_no}", gmaps_url, type="primary", use_container_width=True)
             else:
-                st.error(f"❌ Asset '{sq}' is not reporting in the system.")
+                st.error(f"❌ Vehicle '{sq}' not found.")
                 
         st.markdown("---")
         st.markdown("### 📋 Active Fleet Log")
         st.dataframe(df_gps, hide_index=True)
 
     else:
-        st.error("⚠️ Initializing fleet nodes. Fetching data for the first time...")
-        if st.button("🔄 Start Node Link", use_container_width=True):
-            fetch_fleet_data.clear()
-            st.rerun()
+        st.warning("Live GPS data is not loaded yet. Click 'Fetch Live GPS Data' above.")
